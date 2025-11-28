@@ -51,7 +51,7 @@ export function updateSphere(timestamp, spherePositionUniform) {
 
   // Create vertical motion - sphere moves down into cloth and back up
   // Use sine wave to create smooth oscillation between +0.8 (above) and -0.3 (below/through cloth)
-  const yPosition = Math.sin(timestamp * 0.8) * 0.55 + 0.25;
+  const yPosition = Math.sin(timestamp * 0.8) * 1.0 + 0.25;
 
   sphere.position.set(
     0, // X: centered

@@ -8,13 +8,29 @@
  */
 export const CLOTH_WIDTH = 1.5;
 export const CLOTH_HEIGHT = 1.5;
-export const CLOTH_NUM_SEGMENTS_X = 30;
-export const CLOTH_NUM_SEGMENTS_Y = 30;
+export const CLOTH_NUM_SEGMENTS_X = 80;
+export const CLOTH_NUM_SEGMENTS_Y = 80;
+export const CLOTH_NUM_SEGMENTS_Z = 1;
 
 /**
  * Sphere collision object radius
  */
 export const SPHERE_RADIUS = 0.12;
+
+/**
+ * Cloth thickness parameters for volume preservation
+ * The cloth is modeled as two layers connected by Z-springs
+ */
+export const CLOTH_THICKNESS = 0.003; // Distance between top and bottom layers
+export const Z_SPRING_STIFFNESS = 0.8; // Stiffness of springs connecting layers (volume preservation)
+export const BENDING_STIFFNESS = 0.4; // Stiffness of torsional/bending springs
+
+/**
+ * Cloth breaking/tearing parameters
+ * Applies to all springs (both in-plane and Z-springs)
+ */
+export const SPRING_BREAK_THRESHOLD = 2.0; // Break at 190% of rest length
+export const SPRING_BREAK_ENABLED = true; // Toggle cloth tearing on/off
 
 /**
  * Default simulation parameters

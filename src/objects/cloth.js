@@ -8,14 +8,30 @@
  */
 
 import * as THREE from "three/webgpu";
-import { Fn, attribute, transformNormalToView, cross } from "three/tsl";
+import { Fn, attribute, transformNormalToView, cross, float, vec3, select } from "three/tsl";
 import { vertexPositionBuffer } from "../verlet/buffers.js";
 import { verletVertexColumns } from "../verlet/geometry.js";
 import {
   CLOTH_NUM_SEGMENTS_X,
   CLOTH_NUM_SEGMENTS_Y,
+  CLOTH_WIDTH,
+  CLOTH_HEIGHT,
   DEFAULT_COLORS,
+  SPRING_BREAK_THRESHOLD,
 } from "../config/constants.js";
+
+// Calculate the rest length of edges between adjacent vertices
+const REST_LENGTH_X = CLOTH_WIDTH / CLOTH_NUM_SEGMENTS_X;
+const REST_LENGTH_Y = CLOTH_HEIGHT / CLOTH_NUM_SEGMENTS_Y;
+// Max allowed edge length before considering it "broken"
+const MAX_EDGE_LENGTH = Math.max(REST_LENGTH_X, REST_LENGTH_Y) * SPRING_BREAK_THRESHOLD;
+
+console.log("Cloth tear detection config:", {
+  REST_LENGTH_X,
+  REST_LENGTH_Y,
+  SPRING_BREAK_THRESHOLD,
+  MAX_EDGE_LENGTH
+});
 
 /**
  * The cloth mesh object
@@ -128,10 +144,24 @@ export function setupClothMesh(scene) {
   clothMaterial.positionNode = Fn(({ material }) => {
     // Get the IDs of the 4 Verlet vertices surrounding this mesh vertex
     const vertexIds = attribute("vertexIds");
+    
     const v0 = vertexPositionBuffer.element(vertexIds.x).toVar();
     const v1 = vertexPositionBuffer.element(vertexIds.y).toVar();
     const v2 = vertexPositionBuffer.element(vertexIds.z).toVar();
     const v3 = vertexPositionBuffer.element(vertexIds.w).toVar();
+
+    // Check if any edge of this quad is stretched beyond the break threshold
+    // Quad edges: v0-v1 (top), v2-v3 (bottom), v0-v2 (left), v1-v3 (right)
+    const edge01 = v1.sub(v0).length();
+    const edge23 = v3.sub(v2).length();
+    const edge02 = v2.sub(v0).length();
+    const edge13 = v3.sub(v1).length();
+    
+    // Find the maximum edge length
+    const maxEdge = edge01.max(edge23).max(edge02).max(edge13);
+    
+    // Condition: is this quad torn?
+    const isTorn = maxEdge.greaterThan(float(MAX_EDGE_LENGTH));
 
     // Calculate edge midpoints
     const top = v0.add(v1); // Top edge
@@ -149,8 +179,14 @@ export function setupClothMesh(scene) {
     // Send the normal from vertex shader to fragment shader
     material.normalNode = transformNormalToView(normal).toVarying();
 
-    // Return the center position of the 4 vertices
-    return v0.add(v1).add(v2).add(v3).mul(0.25);
+    // Calculate the center position of the 4 vertices
+    const centerPos = v0.add(v1).add(v2).add(v3).mul(0.25);
+    
+    // If torn, scale position to 0 (degenerate triangle) 
+    // select returns falseValue when condition is false, trueValue when true
+    const scale = select(isTorn, float(0.0), float(1.0));
+    
+    return centerPos.mul(scale);
   })();
 
   // Create and add the mesh to the scene
