@@ -45,6 +45,20 @@ export let sphereUniform = null;
 export let windUniform = null;
 
 /**
+ * Uniform controlling Z-spring stiffness multiplier
+ * Affects springs connecting top and bottom layers (volume preservation)
+ * @type {Object|null}
+ */
+export let zSpringStiffnessUniform = null;
+
+/**
+ * Uniform controlling in-plane spring stiffness multiplier
+ * Affects horizontal, vertical, and diagonal springs within each layer
+ * @type {Object|null}
+ */
+export let inPlaneStiffnessUniform = null;
+
+/**
  * Sets up all uniforms for the simulation
  *
  * Initializes uniform variables with default values that can be
@@ -65,6 +79,8 @@ export function setupUniforms() {
   sphereUniform = uniform(1.0);
   windUniform = uniform(1.0);
   stiffnessUniform = uniform(0.2);
+  zSpringStiffnessUniform = uniform(1.0);  // Multiplier for Z-spring stiffness
+  inPlaneStiffnessUniform = uniform(1.0);  // Multiplier for in-plane spring stiffness
 
   return {
     dampening: dampeningUniform,
@@ -72,6 +88,8 @@ export function setupUniforms() {
     stiffness: stiffnessUniform,
     sphere: sphereUniform,
     wind: windUniform,
+    zSpringStiffness: zSpringStiffnessUniform,
+    inPlaneStiffness: inPlaneStiffnessUniform,
   };
 }
 
@@ -113,4 +131,20 @@ export function getSphereUniform() {
  */
 export function getWindUniform() {
   return windUniform;
+}
+
+/**
+ * Gets the Z-spring stiffness multiplier uniform
+ * @returns {Object|null} The Z-spring stiffness uniform
+ */
+export function getZSpringStiffnessUniform() {
+  return zSpringStiffnessUniform;
+}
+
+/**
+ * Gets the in-plane spring stiffness multiplier uniform
+ * @returns {Object|null} The in-plane stiffness uniform
+ */
+export function getInPlaneStiffnessUniform() {
+  return inPlaneStiffnessUniform;
 }

@@ -29,6 +29,8 @@ import {
   getSphereUniform,
   getWindUniform,
   getSpherePositionUniform,
+  getZSpringStiffnessUniform,
+  getInPlaneStiffnessUniform,
 } from "./utils/uniforms.js";
 import { getClothMesh, getClothMaterial } from "./objects/cloth.js";
 import { getSphere, updateSphere } from "./objects/sphere.js";
@@ -138,6 +140,8 @@ async function init() {
  */
 function setupUI(renderer) {
   const stiffnessUniform = getStiffnessUniform();
+  const zSpringStiffnessUniform = getZSpringStiffnessUniform();
+  const inPlaneStiffnessUniform = getInPlaneStiffnessUniform();
   const clothMaterial = getClothMaterial();
 
   // Create main settings panel
@@ -145,6 +149,8 @@ function setupUI(renderer) {
 
   // Add simulation controls
   gui.add(stiffnessUniform, "value", 0.1, 0.5, 0.01).name("stiffness");
+  gui.add(zSpringStiffnessUniform, "value", 0.0, 3.0, 0.1).name("Z-spring stiffness");
+  gui.add(inPlaneStiffnessUniform, "value", 0.0, 3.0, 0.1).name("In-plane stiffness");
   gui.add(params, "wireframe");
   gui.add(params, "sphere");
 
@@ -214,7 +220,7 @@ async function render() {
     updateSphere(timestamp, spherePositionUniform);
 
     // Execute compute shaders for physics simulation
-    // First calculate spring forces, then apply them to vertices
+    // First calculate all spring forces, then apply them to vertices
     renderer.compute(computeSpringForces);
     renderer.compute(computeVertexForces);
   }

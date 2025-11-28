@@ -13,12 +13,28 @@ import {
   instanceIndex,
   attribute,
   select,
+  float,
 } from 'three/tsl';
 import {
   vertexPositionBuffer,
   springVertexIdBuffer,
+  springStiffnessBuffer,
 } from '../verlet/buffers.js';
 import { verletVertices, verletSprings } from '../verlet/geometry.js';
+import {
+  CLOTH_WIDTH,
+  CLOTH_HEIGHT,
+  CLOTH_NUM_SEGMENTS_X,
+  CLOTH_NUM_SEGMENTS_Y,
+  SPRING_BREAK_THRESHOLD,
+} from '../config/constants.js';
+
+// Calculate the max edge length for tear detection (same as cloth.js)
+const REST_LENGTH = Math.max(
+  CLOTH_WIDTH / CLOTH_NUM_SEGMENTS_X,
+  CLOTH_HEIGHT / CLOTH_NUM_SEGMENTS_Y
+);
+const MAX_EDGE_LENGTH = REST_LENGTH * SPRING_BREAK_THRESHOLD;
 
 /**
  * Mesh object for visualizing Verlet vertices
@@ -88,6 +104,16 @@ export function setupWireframe(scene) {
   springWireframeMaterial.positionNode = Fn(() => {
     // Get the two vertex IDs connected by this spring
     const vertexIds = springVertexIdBuffer.element(instanceIndex);
+    
+    // Get both vertex positions
+    const pos0 = vertexPositionBuffer.element(vertexIds.x);
+    const pos1 = vertexPositionBuffer.element(vertexIds.y);
+    
+    // Calculate the spring length
+    const springLength = pos1.sub(pos0).length();
+    
+    // Check if spring is broken (stretched beyond threshold)
+    const isBroken = springLength.greaterThan(float(MAX_EDGE_LENGTH));
 
     // Select which vertex position to use based on which end of the line
     // we're rendering (determined by the vertexIndex attribute)
@@ -97,8 +123,13 @@ export function setupWireframe(scene) {
       vertexIds.y   // Second vertex of the spring
     );
 
-    // Return the position of the selected vertex
-    return vertexPositionBuffer.element(vertexId);
+    // Get the position of the selected vertex
+    const position = vertexPositionBuffer.element(vertexId);
+    
+    // If broken, scale to 0 (hide the line)
+    const scale = select(isBroken, float(0.0), float(1.0));
+    
+    return position.mul(scale);
   })();
 
   // Create instanced buffer geometry for efficient rendering

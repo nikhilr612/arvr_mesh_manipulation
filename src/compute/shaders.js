@@ -1,10 +1,12 @@
 /**
- * @fileoverview Compute shaders for Verlet cloth simulation
+ * @fileoverview Compute shaders for Verlet cloth simulation with thickness
  * @module compute/shaders
  *
  * This module defines the GPU compute shaders that perform the physics
- * calculations for the Verlet cloth simulation. Two main shaders are used:
- * 1. computeSpringForces - Calculates forces for each spring
+ * calculations for the volume-preserving thick cloth simulation.
+ * 
+ * Two main shaders are used (optimized to stay within WebGPU buffer limits):
+ * 1. computeSpringForces - Calculates all spring forces (in-plane + Z-springs)
  * 2. computeVertexForces - Accumulates forces and updates vertex positions
  */
 
@@ -17,19 +19,21 @@ import {
   Loop,
   float,
   select,
-  triNoise3D,
-  time,
 } from "three/tsl";
 import {
   vertexPositionBuffer,
   vertexForceBuffer,
   vertexParamsBuffer,
+  vertexBrokenBuffer,
   springVertexIdBuffer,
   springRestLengthBuffer,
+  springStiffnessBuffer,
+  springTypeBuffer,
   springForceBuffer,
   springListBuffer,
 } from "../verlet/buffers.js";
 import { getVertexCount, getSpringCount } from "../verlet/geometry.js";
+import { SPRING_BREAK_THRESHOLD, SPRING_BREAK_ENABLED } from "../config/constants.js";
 
 /**
  * Uniform controlling dampening/friction in the simulation
@@ -62,6 +66,18 @@ export let sphereUniform = null;
 export let windUniform = null;
 
 /**
+ * Uniform controlling Z-spring stiffness multiplier
+ * @type {Object|null}
+ */
+export let zSpringStiffnessUniform = null;
+
+/**
+ * Uniform controlling in-plane spring stiffness multiplier
+ * @type {Object|null}
+ */
+export let inPlaneStiffnessUniform = null;
+
+/**
  * Compute shader for calculating spring forces
  * @type {Object|null}
  */
@@ -82,6 +98,8 @@ export let computeVertexForces = null;
  * @param {Object} uniforms.stiffness - Stiffness uniform
  * @param {Object} uniforms.sphere - Sphere collision uniform
  * @param {Object} uniforms.wind - Wind force uniform
+ * @param {Object} uniforms.zSpringStiffness - Z-spring stiffness multiplier
+ * @param {Object} uniforms.inPlaneStiffness - In-plane spring stiffness multiplier
  */
 export function setUniforms(uniforms) {
   dampeningUniform = uniforms.dampening;
@@ -89,6 +107,8 @@ export function setUniforms(uniforms) {
   stiffnessUniform = uniforms.stiffness;
   sphereUniform = uniforms.sphere;
   windUniform = uniforms.wind;
+  zSpringStiffnessUniform = uniforms.zSpringStiffness;
+  inPlaneStiffnessUniform = uniforms.inPlaneStiffness;
 }
 
 /**
@@ -97,22 +117,13 @@ export function setUniforms(uniforms) {
  * Creates two compute shaders that run on the GPU:
  *
  * 1. computeSpringForces:
- *    - Runs once per spring
- *    - Calculates the force for each spring based on its current length
- *      versus its rest length
- *    - Applies Hooke's law: F = k * (distance - restLength)
- *    - Stores the force in springForceBuffer
+ *    - Runs once per spring (both in-plane and Z-springs combined)
+ *    - Each spring has its own stiffness value stored in springStiffnessBuffer
+ *    - Calculates force using Hooke's law: F = k * (distance - restLength)
  *
  * 2. computeVertexForces:
- *    - Runs once per vertex
- *    - Accumulates all forces acting on the vertex:
- *      * Spring forces from connected springs
- *      * Gravity force
- *      * Wind force (using 3D noise for variation)
- *      * Sphere collision force
- *    - Applies dampening to simulate friction
- *    - Updates vertex position based on accumulated forces
- *    - Skips fixed vertices (anchor points)
+ *    - Accumulates all spring forces, gravity, and collision
+ *    - Updates vertex positions using Verlet integration
  *
  * @param {number} sphereRadius - Radius of the collision sphere
  * @throws {Error} If shaders cannot be compiled
@@ -122,123 +133,123 @@ export function setupComputeShaders(sphereRadius) {
   const springCount = getSpringCount();
 
   // ========================================================================
-  // 1. Spring Forces Compute Shader
+  // 1. Spring Forces Compute Shader (handles all springs: in-plane + Z-springs)
   // ========================================================================
-  // This shader computes a force for each spring, depending on the distance
-  // between the two vertices connected by that spring and the targeted rest length
   computeSpringForces = Fn(() => {
-    // Compute shaders are executed in groups of 64, so instanceIndex might
-    // be bigger than the amount of springs. In that case, return early.
     If(instanceIndex.greaterThanEqual(uint(springCount)), () => {
       Return();
     });
 
-    // Get the two vertex IDs connected by this spring
     const vertexIds = springVertexIdBuffer.element(instanceIndex);
-    // Get the target rest length for this spring
     const restLength = springRestLengthBuffer.element(instanceIndex);
+    const baseStiffness = springStiffnessBuffer.element(instanceIndex).toVar();
+    const springType = springTypeBuffer.element(instanceIndex); // 0 = in-plane, 1 = Z-spring
 
-    // Get current positions of both vertices
+    // Apply stiffness multiplier based on spring type
+    // springType == 1 means Z-spring, use zSpringStiffnessUniform
+    // springType == 0 means in-plane spring, use inPlaneStiffnessUniform
+    const stiffnessMultiplier = select(
+      springType.equal(uint(1)),
+      zSpringStiffnessUniform,
+      inPlaneStiffnessUniform
+    );
+    const stiffness = baseStiffness.mul(stiffnessMultiplier).toVar();
+
     const vertex0Position = vertexPositionBuffer.element(vertexIds.x);
     const vertex1Position = vertexPositionBuffer.element(vertexIds.y);
 
-    // Calculate the vector between vertices and its length
     const delta = vertex1Position.sub(vertex0Position).toVar();
-    const dist = delta.length().max(0.000001).toVar(); // Avoid division by zero
+    const dist = delta.length().max(0.000001).toVar();
 
-    // Apply Hooke's law: F = k * (x - x0) * direction
-    // The force is proportional to the difference between current and rest length
-    // Multiply by 0.5 because the force will be applied to both vertices
+    // Check if spring should break (applies to ALL springs: in-plane and Z-springs)
+    // Spring breaks when stretched beyond SPRING_BREAK_THRESHOLD times its rest length
+    // Breaking is only enabled if SPRING_BREAK_ENABLED is true
+    const stretchRatio = dist.div(restLength);
+    If(stretchRatio.greaterThan(float(SPRING_BREAK_ENABLED ? SPRING_BREAK_THRESHOLD : 999999)), () => {
+      // Mark spring as permanently broken by setting stiffness to 0
+      springStiffnessBuffer.element(instanceIndex).assign(0.0);
+      stiffness.assign(0.0);
+      
+      // Mark both connected vertices as having broken springs
+      // This is used by the cloth shader to hide torn areas
+      vertexBrokenBuffer.element(vertexIds.x).assign(uint(1));
+      vertexBrokenBuffer.element(vertexIds.y).assign(uint(1));
+    });
+
+    // Hooke's law: F = k * (x - x0) * direction
+    // Each spring uses its own stiffness (in-plane vs Z-spring)
     const force = dist
       .sub(restLength)
-      .mul(stiffnessUniform)
+      .mul(stiffness)
       .mul(delta)
       .mul(0.5)
       .div(dist);
 
-    // Store the computed force
     springForceBuffer.element(instanceIndex).assign(force);
   })()
-    .compute(springCount)
+    .compute(Math.max(springCount, 1))
     .setName("Spring Forces");
 
   // ========================================================================
   // 2. Vertex Forces Compute Shader
   // ========================================================================
-  // This shader accumulates the force for each vertex.
-  // First it iterates over all springs connected to this vertex and accumulates their forces.
-  // Then it adds gravitational force, wind force, and sphere collision.
-  // Finally, it updates the vertex position.
+  // Accumulates forces from all springs and updates vertex positions
   computeVertexForces = Fn(() => {
-    // Compute shaders are executed in groups of 64, so instanceIndex might
-    // be bigger than the amount of vertices. In that case, return early.
     If(instanceIndex.greaterThanEqual(uint(vertexCount)), () => {
       Return();
     });
 
-    // Get vertex parameters (isFixed, springCount, springPointer)
+    // Get vertex parameters (uvec3: isFixed, springCount, springPointer)
     const params = vertexParamsBuffer.element(instanceIndex).toVar();
     const isFixed = params.x;
-    const springCount = params.y;
+    const numSprings = params.y;
     const springPointer = params.z;
 
-    // Skip force calculation if the vertex is immovable (anchor point)
+    // Skip force calculation if the vertex is immovable
     If(isFixed, () => {
       Return();
     });
 
-    // Get current position and force for this vertex
     const position = vertexPositionBuffer
       .element(instanceIndex)
       .toVar("vertexPosition");
     const force = vertexForceBuffer.element(instanceIndex).toVar("vertexForce");
 
-    // Apply dampening to simulate friction/air resistance
+    // Apply dampening
     force.mulAssign(dampeningUniform);
 
-    // Iterate over all springs connected to this vertex
+    // Accumulate all spring forces (both in-plane and Z-springs)
     const ptrStart = springPointer.toVar("ptrStart");
-    const ptrEnd = ptrStart.add(springCount).toVar("ptrEnd");
+    const ptrEnd = ptrStart.add(numSprings).toVar("ptrEnd");
 
     Loop(
       { start: ptrStart, end: ptrEnd, type: "uint", condition: "<" },
       ({ i }) => {
-        // Get the spring ID from the spring list
         const springId = springListBuffer.element(i).toVar("springId");
-        // Get the force calculated for this spring
         const springForce = springForceBuffer.element(springId);
-        // Get the vertex IDs connected by this spring
         const springVertexIds = springVertexIdBuffer.element(springId);
 
-        // Determine if we need to apply the force positively or negatively
-        // If this vertex is the first vertex of the spring, apply force as-is
-        // If it's the second vertex, apply force in opposite direction
         const factor = select(
           springVertexIds.x.equal(instanceIndex),
           1.0,
           -1.0,
         );
 
-        // Accumulate spring force
         force.addAssign(springForce.mul(factor));
       },
     );
 
-    // Add gravity force (downward acceleration) - reduced since cloth is under tension
-    force.y.subAssign(0.00001);
-
-    // Wind force removed - sphere interaction is the primary force
+    // Add gravity force (reduced since cloth is under tension)
+    console.log(vertexCount)
+    force.y.subAssign(float(9.81).mul(float(0.024).div(float(vertexCount))));
 
     // Handle collision with sphere
-    // Calculate the position after applying current force
     const deltaSphere = position.add(force).sub(spherePositionUniform);
     const dist = deltaSphere.length();
 
-    // If the vertex would penetrate the sphere, apply a repelling force
-    // The force is proportional to the penetration depth
     const sphereForce = float(sphereRadius)
       .sub(dist)
-      .max(0) // Only apply force if penetrating
+      .max(0)
       .mul(deltaSphere)
       .div(dist)
       .mul(sphereUniform);

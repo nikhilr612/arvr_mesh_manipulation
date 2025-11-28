@@ -8,14 +8,24 @@
  */
 
 import * as THREE from "three/webgpu";
-import { Fn, attribute, transformNormalToView, cross } from "three/tsl";
+import { Fn, attribute, transformNormalToView, cross, float, vec3, select, uint } from "three/tsl";
 import { vertexPositionBuffer } from "../verlet/buffers.js";
-import { verletVertexColumns } from "../verlet/geometry.js";
+import { verletVertexColumns, verletVertexColumnsBottom } from "../verlet/geometry.js";
 import {
   CLOTH_NUM_SEGMENTS_X,
   CLOTH_NUM_SEGMENTS_Y,
+  CLOTH_WIDTH,
+  CLOTH_HEIGHT,
   DEFAULT_COLORS,
+  SPRING_BREAK_THRESHOLD,
 } from "../config/constants.js";
+
+// Calculate max edge length before considering it broken (same as wireframe)
+const REST_LENGTH = Math.max(
+  CLOTH_WIDTH / CLOTH_NUM_SEGMENTS_X,
+  CLOTH_HEIGHT / CLOTH_NUM_SEGMENTS_Y
+);
+const MAX_EDGE_LENGTH = REST_LENGTH * SPRING_BREAK_THRESHOLD;
 
 /**
  * The cloth mesh object
@@ -48,67 +58,88 @@ export let clothMaterial = null;
  * @throws {Error} If the mesh cannot be created or added to the scene
  */
 export function setupClothMesh(scene) {
-  const vertexCount = CLOTH_NUM_SEGMENTS_X * CLOTH_NUM_SEGMENTS_Y;
+  // Each Verlet quad gets its own 4 vertices in the mesh (not shared)
+  // This makes each quad independent - no triangles span across quads
+  // We render both TOP and BOTTOM layers for thickness
+  const quadsPerLayer = CLOTH_NUM_SEGMENTS_X * CLOTH_NUM_SEGMENTS_Y;
+  const quadCount = quadsPerLayer * 2; // Top + Bottom layers
+  const vertexCount = quadCount * 4; // 4 vertices per quad
   const geometry = new THREE.BufferGeometry();
 
-  // verletVertexIdArray will hold the 4 Verlet vertex IDs that contribute
-  // to each geometry vertex's position
+  // Each vertex stores the 4 Verlet vertex IDs of its parent quad
   const verletVertexIdArray = new Uint32Array(vertexCount * 4);
+  // Store which corner of the quad this vertex represents (0-3)
+  const cornerIndexArray = new Uint32Array(vertexCount);
   const indices = [];
 
-  /**
-   * Helper function to convert 2D grid coordinates to 1D array index
-   * @param {number} x - X coordinate in grid
-   * @param {number} y - Y coordinate in grid
-   * @returns {number} 1D array index
-   */
-  const getIndex = (x, y) => {
-    return y * CLOTH_NUM_SEGMENTS_X + x;
-  };
-
-  // Build the mesh geometry
+  // Build the mesh geometry - each quad is independent
+  let vertexIndex = 0;
+  
+  // ========== TOP LAYER ==========
   for (let x = 0; x < CLOTH_NUM_SEGMENTS_X; x++) {
     for (let y = 0; y < CLOTH_NUM_SEGMENTS_Y; y++) {
-      const index = getIndex(x, y);
+      // Get the 4 Verlet vertex IDs for this quad (TOP layer)
+      const v0id = verletVertexColumns[x][y].id;
+      const v1id = verletVertexColumns[x + 1][y].id;
+      const v2id = verletVertexColumns[x][y + 1].id;
+      const v3id = verletVertexColumns[x + 1][y + 1].id;
 
-      // Store the IDs of the 4 Verlet vertices surrounding this mesh vertex
-      // These form a quad: (x,y), (x+1,y), (x,y+1), (x+1,y+1)
-      verletVertexIdArray[index * 4] = verletVertexColumns[x][y].id;
-      verletVertexIdArray[index * 4 + 1] = verletVertexColumns[x + 1][y].id;
-      verletVertexIdArray[index * 4 + 2] = verletVertexColumns[x][y + 1].id;
-      verletVertexIdArray[index * 4 + 3] = verletVertexColumns[x + 1][y + 1].id;
-
-      // Build triangle indices for this quad (2 triangles per quad)
-      if (x > 0 && y > 0) {
-        // First triangle
-        indices.push(
-          getIndex(x, y),
-          getIndex(x - 1, y),
-          getIndex(x - 1, y - 1),
-        );
-        // Second triangle
-        indices.push(
-          getIndex(x, y),
-          getIndex(x - 1, y - 1),
-          getIndex(x, y - 1),
-        );
+      // Create 4 mesh vertices for this quad
+      for (let corner = 0; corner < 4; corner++) {
+        const idx = vertexIndex * 4;
+        verletVertexIdArray[idx] = v0id;
+        verletVertexIdArray[idx + 1] = v1id;
+        verletVertexIdArray[idx + 2] = v2id;
+        verletVertexIdArray[idx + 3] = v3id;
+        cornerIndexArray[vertexIndex] = corner;
+        vertexIndex++;
       }
+
+      // Create 2 triangles for this quad (front-facing for top layer)
+      const baseIndex = (x * CLOTH_NUM_SEGMENTS_Y + y) * 4;
+      indices.push(baseIndex + 0, baseIndex + 1, baseIndex + 2);
+      indices.push(baseIndex + 1, baseIndex + 3, baseIndex + 2);
+    }
+  }
+  
+  // ========== BOTTOM LAYER ==========
+  const bottomLayerOffset = quadsPerLayer * 4;
+  for (let x = 0; x < CLOTH_NUM_SEGMENTS_X; x++) {
+    for (let y = 0; y < CLOTH_NUM_SEGMENTS_Y; y++) {
+      // Get the 4 Verlet vertex IDs for this quad (BOTTOM layer)
+      const v0id = verletVertexColumnsBottom[x][y].id;
+      const v1id = verletVertexColumnsBottom[x + 1][y].id;
+      const v2id = verletVertexColumnsBottom[x][y + 1].id;
+      const v3id = verletVertexColumnsBottom[x + 1][y + 1].id;
+
+      // Create 4 mesh vertices for this quad
+      for (let corner = 0; corner < 4; corner++) {
+        const idx = vertexIndex * 4;
+        verletVertexIdArray[idx] = v0id;
+        verletVertexIdArray[idx + 1] = v1id;
+        verletVertexIdArray[idx + 2] = v2id;
+        verletVertexIdArray[idx + 3] = v3id;
+        cornerIndexArray[vertexIndex] = corner;
+        vertexIndex++;
+      }
+
+      // Create 2 triangles for this quad (reverse winding for bottom layer)
+      const baseIndex = bottomLayerOffset + (x * CLOTH_NUM_SEGMENTS_Y + y) * 4;
+      indices.push(baseIndex + 0, baseIndex + 2, baseIndex + 1);
+      indices.push(baseIndex + 1, baseIndex + 2, baseIndex + 3);
     }
   }
 
   // Set up geometry buffers
-  const verletVertexIdBuffer = new THREE.BufferAttribute(
-    verletVertexIdArray,
-    4,
-    false,
-  );
-  const positionBuffer = new THREE.BufferAttribute(
-    new Float32Array(vertexCount * 3),
-    3,
-    false,
-  );
-  geometry.setAttribute("position", positionBuffer);
-  geometry.setAttribute("vertexIds", verletVertexIdBuffer);
+  geometry.setAttribute("position", new THREE.BufferAttribute(
+    new Float32Array(vertexCount * 3), 3, false
+  ));
+  geometry.setAttribute("vertexIds", new THREE.BufferAttribute(
+    verletVertexIdArray, 4, false
+  ));
+  geometry.setAttribute("cornerIndex", new THREE.BufferAttribute(
+    cornerIndexArray, 1, false
+  ));
   geometry.setIndex(indices);
 
   // Create material with physical properties for realistic cloth rendering
@@ -116,24 +147,57 @@ export function setupClothMesh(scene) {
     color: new THREE.Color().setHex(DEFAULT_COLORS.color),
     side: THREE.DoubleSide,
     transparent: true,
-    opacity: 0.85,
-    roughness: 0.7,
-    metalness: 0.0,
+    opacity: 0.95,
+    roughness: 0.4,
+    metalness: 0.4,
     emissive: new THREE.Color().setHex(DEFAULT_COLORS.color),
     emissiveIntensity: 0.2,
   });
 
   // Custom position node that calculates vertex position and normal
-  // from the 4 surrounding Verlet vertices
+  // Each vertex is positioned at one of the 4 corners of its Verlet quad
   clothMaterial.positionNode = Fn(({ material }) => {
-    // Get the IDs of the 4 Verlet vertices surrounding this mesh vertex
+    // Get the IDs of the 4 Verlet vertices for this quad
     const vertexIds = attribute("vertexIds");
+    // Get which corner of the quad this vertex represents (0-3)
+    const cornerIndex = attribute("cornerIndex");
+    
+    // Get all 4 Verlet positions
     const v0 = vertexPositionBuffer.element(vertexIds.x).toVar();
     const v1 = vertexPositionBuffer.element(vertexIds.y).toVar();
     const v2 = vertexPositionBuffer.element(vertexIds.z).toVar();
     const v3 = vertexPositionBuffer.element(vertexIds.w).toVar();
-
-    // Calculate edge midpoints
+    
+    // Check if any edge of this quad is broken (too long)
+    // Quad edges: v0-v1 (top), v2-v3 (bottom), v0-v2 (left), v1-v3 (right)
+    const edge01 = v1.sub(v0).length();
+    const edge23 = v3.sub(v2).length();
+    const edge02 = v2.sub(v0).length();
+    const edge13 = v3.sub(v1).length();
+    
+    const maxEdgeThreshold = float(MAX_EDGE_LENGTH);
+    const isQuadBroken = edge01.greaterThan(maxEdgeThreshold)
+      .or(edge23.greaterThan(maxEdgeThreshold))
+      .or(edge02.greaterThan(maxEdgeThreshold))
+      .or(edge13.greaterThan(maxEdgeThreshold));
+    
+    // Select position based on corner index
+    // Corner 0 = v0, Corner 1 = v1, Corner 2 = v2, Corner 3 = v3
+    const isCorner0 = cornerIndex.equal(uint(0));
+    const isCorner1 = cornerIndex.equal(uint(1));
+    const isCorner2 = cornerIndex.equal(uint(2));
+    
+    const cornerPosition = select(isCorner0, v0,
+      select(isCorner1, v1,
+        select(isCorner2, v2, v3)
+      )
+    );
+    
+    // If quad is broken, collapse ALL vertices to the same point (v0)
+    // This makes both triangles degenerate (zero area) and invisible
+    const position = select(isQuadBroken, v0, cornerPosition);
+    
+    // Calculate edge midpoints for normal calculation
     const top = v0.add(v1); // Top edge
     const right = v1.add(v3); // Right edge
     const bottom = v2.add(v3); // Bottom edge
@@ -148,9 +212,8 @@ export function setupClothMesh(scene) {
 
     // Send the normal from vertex shader to fragment shader
     material.normalNode = transformNormalToView(normal).toVarying();
-
-    // Return the center position of the 4 vertices
-    return v0.add(v1).add(v2).add(v3).mul(0.25);
+    
+    return position;
   })();
 
   // Create and add the mesh to the scene
