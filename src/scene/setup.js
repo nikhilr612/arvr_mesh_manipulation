@@ -135,24 +135,34 @@ export function initControls(cam, domElement) {
 export function setupSceneBackground(sceneObj) {
   sceneObj.background = new THREE.Color(BACKGROUND_COLOR);
 
-  // Add ambient light for overall illumination
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+  // Low ambient to avoid washing out shadows
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.25);
   sceneObj.add(ambientLight);
 
-  // Add main directional light from above-front
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
-  directionalLight.position.set(2, 5, 3);
-  sceneObj.add(directionalLight);
+  // Hemisphere light - subtle gradient
+  const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.3);
+  hemiLight.position.set(0, 10, 0);
+  sceneObj.add(hemiLight);
 
-  // Add a second directional light from the side for depth
-  const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.5);
-  directionalLight2.position.set(-3, 3, -2);
-  sceneObj.add(directionalLight2);
+  // Strong key light from above-front-right (main light source)
+  const keyLight = new THREE.DirectionalLight(0xffffff, 1.8);
+  keyLight.position.set(5, 12, 5);
+  sceneObj.add(keyLight);
 
-  // Add a fill light from below to see cloth deformation
-  const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
-  fillLight.position.set(0, -2, 0);
+  // Fill light from left side (much softer than key)
+  const fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
+  fillLight.position.set(-8, 4, 2);
   sceneObj.add(fillLight);
+
+  // Back light for rim/edge definition
+  const backLight = new THREE.DirectionalLight(0xffffff, 0.4);
+  backLight.position.set(0, 3, -10);
+  sceneObj.add(backLight);
+
+  // Subtle bottom fill
+  const bottomLight = new THREE.DirectionalLight(0xffffff, 0.15);
+  bottomLight.position.set(0, -5, 0);
+  sceneObj.add(bottomLight);
 }
 
 /**

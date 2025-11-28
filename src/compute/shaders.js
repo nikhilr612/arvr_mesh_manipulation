@@ -240,7 +240,8 @@ export function setupComputeShaders(sphereRadius) {
     );
 
     // Add gravity force (reduced since cloth is under tension)
-    force.y.subAssign(0.00001);
+    console.log(vertexCount)
+    force.y.subAssign(float(9.81).mul(float(0.024).div(float(vertexCount))));
 
     // Handle collision with sphere
     const deltaSphere = position.add(force).sub(spherePositionUniform);
