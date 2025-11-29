@@ -19,6 +19,8 @@ import {
   Loop,
   float,
   select,
+  vec2,
+  vec3,
 } from "three/tsl";
 import {
   vertexPositionBuffer,
@@ -78,6 +80,18 @@ export let zSpringStiffnessUniform = null;
 export let inPlaneStiffnessUniform = null;
 
 /**
+ * Uniform controlling sphere collision radius
+ * @type {Object|null}
+ */
+export let sphereRadiusUniform = null;
+
+/**
+ * Uniform controlling cylinder collision height
+ * @type {Object|null}
+ */
+export let cylinderHeightUniform = null;
+
+/**
  * Compute shader for calculating spring forces
  * @type {Object|null}
  */
@@ -100,6 +114,8 @@ export let computeVertexForces = null;
  * @param {Object} uniforms.wind - Wind force uniform
  * @param {Object} uniforms.zSpringStiffness - Z-spring stiffness multiplier
  * @param {Object} uniforms.inPlaneStiffness - In-plane spring stiffness multiplier
+ * @param {Object} uniforms.sphereRadius - Sphere/cylinder collision radius
+ * @param {Object} uniforms.cylinderHeight - Cylinder height (0 = sphere mode)
  */
 export function setUniforms(uniforms) {
   dampeningUniform = uniforms.dampening;
@@ -109,6 +125,8 @@ export function setUniforms(uniforms) {
   windUniform = uniforms.wind;
   zSpringStiffnessUniform = uniforms.zSpringStiffness;
   inPlaneStiffnessUniform = uniforms.inPlaneStiffness;
+  sphereRadiusUniform = uniforms.sphereRadius;
+  cylinderHeightUniform = uniforms.cylinderHeight;
 }
 
 /**
@@ -125,10 +143,9 @@ export function setUniforms(uniforms) {
  *    - Accumulates all spring forces, gravity, and collision
  *    - Updates vertex positions using Verlet integration
  *
- * @param {number} sphereRadius - Radius of the collision sphere
  * @throws {Error} If shaders cannot be compiled
  */
-export function setupComputeShaders(sphereRadius) {
+export function setupComputeShaders() {
   const vertexCount = getVertexCount();
   const springCount = getSpringCount();
 
@@ -243,18 +260,56 @@ export function setupComputeShaders(sphereRadius) {
     console.log(vertexCount)
     force.y.subAssign(float(9.81).mul(float(0.024).div(float(vertexCount))));
 
-    // Handle collision with sphere
-    const deltaSphere = position.add(force).sub(spherePositionUniform);
-    const dist = deltaSphere.length();
-
-    const sphereForce = float(sphereRadius)
-      .sub(dist)
-      .max(0)
-      .mul(deltaSphere)
-      .div(dist)
-      .mul(sphereUniform);
-
-    force.addAssign(sphereForce);
+    // Handle collision with sphere or cylinder
+    // spherePositionUniform is the TOP of the cylinder (or center of sphere)
+    // Cylinder extends downward (negative Y) from this position
+    const cylinderTop = spherePositionUniform.y;
+    const cylinderBottom = cylinderTop.sub(cylinderHeightUniform);
+    const newPos = position.add(force);
+    
+    // Calculate horizontal distance from cylinder axis
+    const deltaXZ = vec2(newPos.x.sub(spherePositionUniform.x), newPos.z.sub(spherePositionUniform.z));
+    const distXZ = deltaXZ.length();
+    
+    // Check if within cylinder height range (between top and bottom)
+    const withinHeight = newPos.y.lessThanEqual(cylinderTop).and(newPos.y.greaterThanEqual(cylinderBottom));
+    
+    // Cylinder body collision: push outward horizontally
+    const cylinderPenetration = sphereRadiusUniform.sub(distXZ);
+    const cylinderCollision = withinHeight.and(cylinderPenetration.greaterThan(0)).and(cylinderHeightUniform.greaterThan(0));
+    
+    // Sphere collision at bottom cap
+    const deltaSphere = newPos.sub(vec3(spherePositionUniform.x, cylinderBottom, spherePositionUniform.z));
+    const distSphere = deltaSphere.length();
+    const spherePenetration = sphereRadiusUniform.sub(distSphere);
+    const sphereCollision = spherePenetration.greaterThan(0).and(newPos.y.lessThan(cylinderBottom));
+    
+    // Pure sphere mode (when cylinderHeight is 0)
+    const deltaPureSphere = newPos.sub(spherePositionUniform);
+    const distPureSphere = deltaPureSphere.length();
+    const pureSphereCollision = cylinderHeightUniform.lessThanEqual(0);
+    
+    // Calculate collision force
+    const collisionForce = vec3(0, 0, 0).toVar();
+    
+    // Cylinder body: push horizontally outward
+    If(cylinderCollision, () => {
+      const pushDir = vec3(deltaXZ.x, 0, deltaXZ.y).normalize();
+      collisionForce.assign(pushDir.mul(cylinderPenetration));
+    });
+    
+    // Sphere cap at bottom: push radially outward
+    If(sphereCollision.and(cylinderHeightUniform.greaterThan(0)), () => {
+      collisionForce.assign(deltaSphere.normalize().mul(spherePenetration));
+    });
+    
+    // Pure sphere mode
+    If(pureSphereCollision, () => {
+      const purePenetration = sphereRadiusUniform.sub(distPureSphere).max(0);
+      collisionForce.assign(deltaPureSphere.normalize().mul(purePenetration));
+    });
+    
+    force.addAssign(collisionForce.mul(sphereUniform));
 
     // Update the force buffer and apply force to position (Verlet integration)
     vertexForceBuffer.element(instanceIndex).assign(force);

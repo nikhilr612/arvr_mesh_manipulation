@@ -8,8 +8,8 @@
  */
 export const CLOTH_WIDTH = 1.5;
 export const CLOTH_HEIGHT = 1.5;
-export const CLOTH_NUM_SEGMENTS_X = 100;
-export const CLOTH_NUM_SEGMENTS_Y = 100;
+export const CLOTH_NUM_SEGMENTS_X = 50;
+export const CLOTH_NUM_SEGMENTS_Y = 50;
 
 /**
  * Sphere collision object radius

@@ -172,3 +172,41 @@ export function setupVerletSpringBuffers() {
   springTypeBuffer = instancedArray(springTypeArray.length > 0 ? springTypeArray : new Uint32Array([0]), 'uint');
   springForceBuffer = instancedArray(Math.max(springCount, 1) * 3, 'vec3').setPBO(true);
 }
+
+/**
+ * Resets all simulation buffers to their initial state
+ * 
+ * Restores vertex positions to their original locations and
+ * resets spring stiffness values (repairing any broken springs).
+ */
+export function resetSimulationBuffers() {
+  const vertexCount = verletVertices.length;
+  const springCount = verletSprings.length;
+
+  // Get the underlying arrays from the TSL instancedArray nodes
+  const positionArray = vertexPositionBuffer.value.array;
+  const stiffnessArray = springStiffnessBuffer.value.array;
+  const brokenArray = vertexBrokenBuffer.value.array;
+
+  // Reset vertex positions to initial values
+  for (let i = 0; i < vertexCount; i++) {
+    const vertex = verletVertices[i];
+    positionArray[i * 3] = vertex.position.x;
+    positionArray[i * 3 + 1] = vertex.position.y;
+    positionArray[i * 3 + 2] = vertex.position.z;
+  }
+  // Mark buffer as needing update
+  vertexPositionBuffer.value.needsUpdate = true;
+
+  // Reset spring stiffness values (repair broken springs)
+  for (let i = 0; i < springCount; i++) {
+    stiffnessArray[i] = verletSprings[i].stiffness;
+  }
+  springStiffnessBuffer.value.needsUpdate = true;
+
+  // Reset vertex broken flags
+  for (let i = 0; i < vertexCount; i++) {
+    brokenArray[i] = 0;
+  }
+  vertexBrokenBuffer.value.needsUpdate = true;
+}
