@@ -59,6 +59,20 @@ export let zSpringStiffnessUniform = null;
 export let inPlaneStiffnessUniform = null;
 
 /**
+ * Uniform controlling sphere collision radius
+ * Affects the size of the collision sphere/cylinder
+ * @type {Object|null}
+ */
+export let sphereRadiusUniform = null;
+
+/**
+ * Uniform controlling cylinder collision height
+ * When > 0, collision uses cylinder mode instead of sphere
+ * @type {Object|null}
+ */
+export let cylinderHeightUniform = null;
+
+/**
  * Sets up all uniforms for the simulation
  *
  * Initializes uniform variables with default values that can be
@@ -81,6 +95,8 @@ export function setupUniforms() {
   stiffnessUniform = uniform(0.2);
   zSpringStiffnessUniform = uniform(1.0);  // Multiplier for Z-spring stiffness
   inPlaneStiffnessUniform = uniform(1.0);  // Multiplier for in-plane spring stiffness
+  sphereRadiusUniform = uniform(0.12);     // Collision sphere/cylinder radius
+  cylinderHeightUniform = uniform(0.0);    // Cylinder height (0 = sphere mode)
 
   return {
     dampening: dampeningUniform,
@@ -90,6 +106,8 @@ export function setupUniforms() {
     wind: windUniform,
     zSpringStiffness: zSpringStiffnessUniform,
     inPlaneStiffness: inPlaneStiffnessUniform,
+    sphereRadius: sphereRadiusUniform,
+    cylinderHeight: cylinderHeightUniform,
   };
 }
 
@@ -147,4 +165,20 @@ export function getZSpringStiffnessUniform() {
  */
 export function getInPlaneStiffnessUniform() {
   return inPlaneStiffnessUniform;
+}
+
+/**
+ * Gets the sphere collision radius uniform
+ * @returns {Object|null} The sphere radius uniform
+ */
+export function getSphereRadiusUniform() {
+  return sphereRadiusUniform;
+}
+
+/**
+ * Gets the cylinder height uniform
+ * @returns {Object|null} The cylinder height uniform
+ */
+export function getCylinderHeightUniform() {
+  return cylinderHeightUniform;
 }

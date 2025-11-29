@@ -17,7 +17,6 @@ import { setupComputeShaders, setUniforms } from "../compute/shaders.js";
 import { setupWireframe } from "../objects/wireframe.js";
 import { setupSphere } from "../objects/sphere.js";
 import { setupClothMesh } from "../objects/cloth.js";
-import { SPHERE_RADIUS } from "../config/constants.js";
 
 /**
  * Sets up the complete cloth simulation with volume-preserving thickness
@@ -52,7 +51,7 @@ export function setupCloth(scene) {
 
   // Step 5: Set up compute shaders and pass uniforms to them
   setUniforms(uniforms);
-  setupComputeShaders(SPHERE_RADIUS);
+  setupComputeShaders();
 
   // Step 6: Create wireframe visualization helpers
   setupWireframe(scene);
